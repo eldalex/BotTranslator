@@ -1,0 +1,1 @@
+Бот переводчик на основе старой yandex translate api (https://fasttranslator.herokuapp.com/)  и developers.lingvolive.com
