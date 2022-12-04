@@ -64,6 +64,7 @@ def get_word_from_db(user_id):
 @bot.message_handler(commands=['workout'])
 def workout(message, word_info=None):
     if word_info is None:
+        bot.send_message(message.chat.id, 'Режим тренировки, чтобы выйти введи stop')
         word_info = get_word_from_db(message.chat.id)
     msg = bot.reply_to(message, f'Переведи слово: {word_info["eng"]}')
     bot.register_next_step_handler(msg, try_translate, word_info)
@@ -85,7 +86,7 @@ def increace_pisitive(word_info, result):
 def try_translate(message, word_info):
     if message.text == 'stop':
         bot.send_message(message.chat.id, 'Закончили')
-    elif message.text in word_info["rus"]:
+    elif message.text.lower() in word_info["rus"].lower():
         bot.send_message(message.chat.id, f'правильно')
         increace_pisitive(word_info, "positive")
         word_info = get_word_from_db(message.chat.id)
@@ -143,7 +144,6 @@ def get_text_messages(message):
             answer = get_translate_from_ya(message.text, direction)
             bot.send_message(message.chat.id, answer)
             send_user_word(message.chat.id, direction, message.text, answer)
-            print(f'добавляем {message.text} -> {answer}')
         else:
             bot.send_message(message.chat.id, "Ошибка при определении направления перевода")
 
