@@ -2,14 +2,39 @@ import sqlite3
 import random
 import requests
 import telebot
+from datetime import datetime
 import time
 from telebot import types
 import os
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
-
+aim_token = os.environ.get("AIMTOKEN")
+aim_token_data_expired = datetime.strptime(os.environ.get("AIMTOKENDATA"), '%Y-%m-%dT%H:%M:%S.%f')
+test = os.environ.get("TEST")
 bot = telebot.TeleBot(os.environ.get('TOKEN'))
+
+
+# проверяем годность токена. если его нет или осталось меньше часа, получаем новый.
+def check_aim_token():
+    if aim_token is None and aim_token_data_expired is None:
+        get_aim_token()
+    else:
+        time_left = aim_token_data_expired - datetime.now()
+        if (time_left.seconds / 60 / 60) < 1:
+            get_aim_token()
+        else:
+            pass
+
+
+def get_aim_token():
+    url = "https://iam.api.cloud.yandex.net/iam/v1/tokens"
+    body = {
+        "yandexPassportOauthToken": os.environ.get("YAAUTH")
+    }
+    result = requests.post(url, json=body)
+    aim_token = result.json()['iamToken']
+    aim_token_data_expired = datetime.strptime(result.json()['expiresAt'][0:26], '%Y-%m-%dT%H:%M:%S.%f')
 
 
 def get_word_from_db(user_id):
@@ -19,10 +44,16 @@ def get_word_from_db(user_id):
         cursor.execute(f"SELECT * from USER_WORDS where user_id={user_id} ORDER by negative DESC  limit 20")
         data = cursor.fetchall()
         random_from_dataset = random.randint(0, len(data) - 1)
-        eng_words = data[random_from_dataset][1].split(',')
-        rus_words = data[random_from_dataset][2].split(',')
-        eng_word = eng_words[random.randint(0, len(eng_words) - 1)]
-        return eng_word, rus_words
+        word_info = {
+            "id": data[random_from_dataset][0],
+            "eng": data[random_from_dataset][2],
+            "rus": data[random_from_dataset][3],
+            "positive": data[random_from_dataset][4],
+            "negative": data[random_from_dataset][5],
+            "count_try": data[random_from_dataset][6]
+        }
+
+        return word_info
     except Exception as e:
         print(e)
         pass
@@ -31,24 +62,39 @@ def get_word_from_db(user_id):
 
 
 @bot.message_handler(commands=['workout'])
-def workout(message, eng_word=None, rus_words=None):
-    if eng_word is None and rus_words is None:
-        eng_word, rus_words = get_word_from_db(message.chat.id)
-    msg = bot.reply_to(message, f"Переведи слово: {eng_word}")
-    bot.register_next_step_handler(msg, try_translate, eng_word, rus_words)
+def workout(message, word_info=None):
+    if word_info is None:
+        word_info = get_word_from_db(message.chat.id)
+    msg = bot.reply_to(message, f'Переведи слово: {word_info["eng"]}')
+    bot.register_next_step_handler(msg, try_translate, word_info)
 
 
-def try_translate(message, eng_word, rus_words):
+def increace_pisitive(word_info, result):
+    positive = f'UPDATE USER_WORDS SET positive={word_info["positive"] + 1},  count_try={word_info["count_try"] + 1} WHERE ID = {word_info["id"]}'
+    negative = f'UPDATE USER_WORDS SET negative={word_info["negative"] + 1},  count_try={word_info["count_try"] + 1} WHERE ID = {word_info["id"]}'
+    connection = sqlite3.connect('database/translatorDB.db')
+    cursor = connection.cursor()
+    if result == 'positive':
+        cursor.execute(positive)
+    else:
+        cursor.execute(negative)
+    connection.commit()
+    connection.close()
+
+
+def try_translate(message, word_info):
     if message.text == 'stop':
         bot.send_message(message.chat.id, 'Закончили')
-    elif message.text in rus_words:
+    elif message.text in word_info["rus"]:
         bot.send_message(message.chat.id, f'правильно')
-        eng_word, rus_words = get_word_from_db(message.chat.id)
-        workout(message, eng_word, rus_words)
+        increace_pisitive(word_info, "positive")
+        word_info = get_word_from_db(message.chat.id)
+        workout(message, word_info)
     else:
-        bot.send_message(message.chat.id, 'не правильно')
-        eng_word, rus_words = get_word_from_db(message.chat.id)
-        workout(message, eng_word, rus_words)
+        bot.send_message(message.chat.id, f'не правильно, это: {word_info["rus"]}')
+        increace_pisitive(word_info, "negative")
+        word_info = get_word_from_db(message.chat.id)
+        workout(message, word_info)
 
 
 @bot.message_handler(commands=['start'])
@@ -69,59 +115,40 @@ def send_welcome(message):
                          message.from_user), reply_markup=markup)
 
 
+def get_translate_from_ya(text, direction):
+    url = 'https://translate.api.cloud.yandex.net/translate/v2/translate'
+    body = {
+        "targetLanguageCode": direction,
+        "texts": text,
+        "folderId": os.environ.get('FOLDERID'),
+    }
+    headers = {
+        "Authorization": f"Bearer {aim_token}"
+    }
+    result = requests.post(url, headers=headers, json=body)
+    if result.status_code == 200:
+        return result.json()["translations"][0]["text"]
+    else:
+        return f"Ошибка: {result.status_code}"
+
+
 @bot.message_handler(content_types=['text'])
 def get_text_messages(message):
-    msg = message.text.split()
-    if len(msg) > 1:
-        answer, forward = get_translate_word_v1(message.text)
-        if not answer:
-            answer = 'Error1'
+    check_aim_token()
+    if (len(message.text.split()) > 10) or (len(message.text) > 50):
+        bot.send_message(message.chat.id, "Мы тут слова и короткие фразы переводим, а не вот это вот всё")
     else:
-        answer, forward = get_translate_word_v1(message.text)
-        if not answer:
-            if forward == 'ru-en':
-                src_lang = '1049'
-                dst_lang = '1033'
-            elif forward == 'en-ru':
-                src_lang = '1033'
-                dst_lang = '1049'
-            answer = get_translate_word_v2(message.text, src_lang, dst_lang)
-            if not answer:
-                answer = 'Error2'
-    if answer == 'Error1':
-        bot.send_message(message.chat.id, 'Проблема с переводом фраз. попробуйте по одному слову')
-    elif answer == 'Error2':
-        bot.send_message(message.chat.id,
-                         'Проблема с переводом сразу у двух сервисов, либо никто не знает такого слова.')
-    else:
-        bot.send_message(message.chat.id, answer)
-        send_user_word(message.chat.id, forward, message.text, answer)
-        print(f'добавляем {message.text} -> {answer}')
+        direction = get_direction_translate(message.text)
+        if direction:
+            answer = get_translate_from_ya(message.text, direction)
+            bot.send_message(message.chat.id, answer)
+            send_user_word(message.chat.id, direction, message.text, answer)
+            print(f'добавляем {message.text} -> {answer}')
+        else:
+            bot.send_message(message.chat.id, "Ошибка при определении направления перевода")
 
 
-def get_translate_word_v2(word, src_lang, dst_lang):
-    base_url = 'https://developers.lingvolive.com'
-    auth_url = f'/api/v1/authenticate'
-    headers = {
-        'Authorization': f"Basic {os.environ.get('AUTHLINGUO')}"
-    }
-    auth = requests.post(url=base_url + auth_url, headers=headers)
-    headers = {
-        'Authorization': f"Bearer {auth.json()}"
-    }
-    mindcardurl = '/api/v1/Minicard'
-    src_lang = f'&srcLang={src_lang}'
-    dst_lang = f'&dstLang={dst_lang}'
-    text = f'?text={word}'
-    url = base_url + mindcardurl + text + src_lang + dst_lang
-    check_word = requests.get(url=url, headers=headers)
-    if check_word.status_code == 200:
-        return check_word.json()['Translation']['Translation']
-    else:
-        return False
-
-
-def get_language(symbol):
+def get_direction_translate(symbol):
     en = False
     ru = False
     for i in symbol:
@@ -131,28 +158,11 @@ def get_language(symbol):
         elif 65 <= test_code <= 122:
             en = True
     if ru and not en:
-        return 'ru-en'
+        return 'en'
     elif en and not ru:
-        return 'en-ru'
+        return 'ru'
     elif en and ru:
         return False
-
-
-def get_translate_word_v1(text):
-    base = 'https://fasttranslator.herokuapp.com/api/v1/text/to/text'
-    source = f'?source={text}'
-    forward = get_language(text)
-    if not forward:
-        return 'У вас в сообщении буквы из двух языков. пожалуйста, напишите на каком нибудь одном.'
-    else:
-        lang = f'&lang={forward}'
-        typeparam = '&as=json'
-        url = base + source + lang + typeparam
-        responce = requests.get(url)
-        if responce.status_code == 200:
-            return responce.json()['data'], forward
-        else:
-            return False, forward
 
 
 def create_user_table(connect):
@@ -200,13 +210,13 @@ def send_user_info(usinfo):
     connection.close()
 
 
-def send_user_word(user_id, forward, message, translate):
-    if forward == 'ru-en':
+def send_user_word(user_id, direction, message, translate):
+    if direction == 'en':
         rus_word = message
-        eng_word = translate.replace(' ', '').replace(';', ',')
-    elif forward == 'en-ru':
+        eng_word = translate
+    elif direction == 'ru':
         eng_word = message
-        rus_word = translate.replace(' ', '').replace(';', ',')
+        rus_word = translate
     connection = sqlite3.connect('database/translatorDB.db')
     cursor = connection.cursor()
     try:
