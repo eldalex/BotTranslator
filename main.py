@@ -9,32 +9,26 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
-aim_token = os.environ.get("AIMTOKEN")
-aim_token_data_expired = datetime.strptime(os.environ.get("AIMTOKENDATA"), '%Y-%m-%dT%H:%M:%S.%f')
+token = os.environ.get("AIMTOKEN")
+token_data_expired = datetime.strptime(os.environ.get("AIMTOKENDATA"), '%Y-%m-%dT%H:%M:%S.%f')
 test = os.environ.get("TEST")
 bot = telebot.TeleBot(os.environ.get('TOKEN'))
 
 
 # проверяем годность токена. если его нет или осталось меньше часа, получаем новый.
-def check_aim_token():
-    if aim_token is None and aim_token_data_expired is None:
-        get_aim_token()
+
+def get_aim_token(token, token_data_expired):
+    if token_data_expired <= datetime.now():
+        url = "https://iam.api.cloud.yandex.net/iam/v1/tokens"
+        body = {
+            "yandexPassportOauthToken": os.environ.get("YAAUTH")
+        }
+        result = requests.post(url, json=body)
+        aim_token = result.json()['iamToken']
+        aim_token_data_expired = datetime.strptime(result.json()['expiresAt'][0:26], '%Y-%m-%dT%H:%M:%S.%f')
+        return aim_token, aim_token_data_expired
     else:
-        time_left = aim_token_data_expired - datetime.now()
-        if (time_left.seconds / 60 / 60) < 1:
-            get_aim_token()
-        else:
-            pass
-
-
-def get_aim_token():
-    url = "https://iam.api.cloud.yandex.net/iam/v1/tokens"
-    body = {
-        "yandexPassportOauthToken": os.environ.get("YAAUTH")
-    }
-    result = requests.post(url, json=body)
-    aim_token = result.json()['iamToken']
-    aim_token_data_expired = datetime.strptime(result.json()['expiresAt'][0:26], '%Y-%m-%dT%H:%M:%S.%f')
+        return token, token_data_expired
 
 
 def get_word_from_db(user_id):
@@ -117,6 +111,11 @@ def send_welcome(message):
 
 
 def get_translate_from_ya(text, direction):
+    global token
+    global token_data_expired
+    aim_token, aim_token_data_expired = get_aim_token(token, token_data_expired)
+    token = aim_token
+    token_data_expired = aim_token_data_expired
     url = 'https://translate.api.cloud.yandex.net/translate/v2/translate'
     body = {
         "targetLanguageCode": direction,
@@ -135,7 +134,6 @@ def get_translate_from_ya(text, direction):
 
 @bot.message_handler(content_types=['text'])
 def get_text_messages(message):
-    check_aim_token()
     if (len(message.text.split()) > 10) or (len(message.text) > 50):
         bot.send_message(message.chat.id, "Мы тут слова и короткие фразы переводим, а не вот это вот всё")
     else:
