@@ -1,4 +1,5 @@
 Бот переводчик на основе старой yandex translate api (https://fasttranslator.herokuapp.com/)  и developers.lingvolive.com
+https://t.me/Fast_mini_translate_bot
 04.12.2022: Переделал на один истоник перевода. Новый yandex translate api
             переводит фразы до 10 слов либо до 100 символов.
             Собрал всё в контейнер.
@@ -8,3 +9,4 @@
             AIMTOKEN=""     Сервисный токен, действителен 12 часов. в принципе необязательный.
             AIMTOKENDATA="" Дата истечения сервисного токена. тоже не обязательно.
             FOLDERID=""     Каталог yandex cloud к которому есть доступ.
+13.12.2022  Исправил получение AIM токена.
